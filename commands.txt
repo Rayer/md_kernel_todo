@@ -1,0 +1,3 @@
+load inputs
+show inbox
+step result
