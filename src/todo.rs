@@ -17,13 +17,12 @@ pub struct Todo {
     pub created_time: u64,
     pub due_time: u64,
     pub completed: bool,
-    pub deleted: bool,
     pub owner: String,
 }
 
 impl Default for Todo {
     fn default() -> Self {
-        Todo::new(0, "".to_string(), 0, 0, false)
+        Todo::new(0, "".to_string(), 0, 0, false, "".to_string())
     }
 }
 
@@ -60,15 +59,14 @@ impl Into<[u8; MAX_TODO_SIZE]> for Todo {
 }
 
 impl Todo {
-    pub fn new(id: u64, title: String, created_time: u64, due_time: u64, completed: bool) -> Self {
+    pub fn new(id: u64, title: String, created_time: u64, due_time: u64, completed: bool, owner: String) -> Self {
         Self {
             id,
             title,
             created_time,
             due_time,
             completed,
-            deleted: false,
-            owner: "".to_string(),
+            owner,
         }
     }
 
@@ -84,17 +82,12 @@ impl Todo {
         self.due_time > 0 && self.due_time < self.created_time
     }
 
-    //once deleted, it cannot be recovered
-    pub fn delete(&mut self) {
-        self.deleted = true;
-    }
-
     pub fn accessible_by(&self, user: &str) -> bool {
         self.owner == user
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Action {
     Create,
     Read,
@@ -102,35 +95,10 @@ pub enum Action {
     MarkComplete,
 }
 
-impl TryFrom<Vec<u8>> for Action {
-    type Error = String;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        match value.first() {
-            Some(&b'c') => Ok(Action::Create),
-            Some(&b'r') => Ok(Action::Read),
-            Some(&b'd') => Ok(Action::Delete),
-            Some(&b'u') => Ok(Action::MarkComplete),
-            _ => Err("Deserialization is not respected".to_string()),
-        }
-    }
-}
-
-impl Into<[u8;1]> for Action {
-    fn into(self) -> [u8;1] {
-        match self {
-            Action::Create => [b'c'],
-            Action::Read => [b'r'],
-            Action::Delete => [b'd'],
-            Action::MarkComplete => [b'u'],
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TodoActions {
     pub action: Action,
-    //pub user: String,
+    pub user: String,
     pub todo: Todo,
 }
 
@@ -138,17 +106,22 @@ impl TryFrom<Vec<u8>> for TodoActions {
     type Error = String;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let action = Action::try_from(value.clone())?;
-        let todo = Todo::try_from(value[1..].to_vec())?;
-        Ok(TodoActions { action, todo })
+        let str = String::from_utf8(value).unwrap();
+        let str = str.trim_end_matches(char::from(0));
+        serde_json::from_str(&str).map_err(|e| e.to_string())
     }
 }
 
 impl Into<Vec<u8>> for TodoActions {
     fn into(self) -> Vec<u8> {
-        let mut ret  = Vec::<u8>::new();
-        ret.push(<Action as Into<[u8;1]>>::into(self.action)[0]);
-        ret.extend(<Todo as Into<[u8;MAX_TODO_SIZE]>>::into(self.todo)[0..].to_vec());
+        let todo_str = serde_json::to_string(&self).unwrap();
+        let mut ret: Vec<u8> = Vec::with_capacity(MAX_TODO_PAYLOAD_SIZE);
+        let bytes = todo_str.as_bytes();
+        if bytes.len() <= ret.capacity() {
+            ret.extend_from_slice(bytes);
+        } else {
+            panic!("String is too long to fit in the array")
+        }
         ret
     }
 }
@@ -161,7 +134,8 @@ mod tests {
     fn test_ta_into() {
         let t = TodoActions {
             action: Action::MarkComplete,
-            todo: Todo::new(0, "test".to_string(), 0, 0, false),
+            todo: Todo::new(1, "Test1".to_string(), 0, 0, false, "Rayer".to_string()),
+            user: "Rayer".to_string(),
         };
         let ta : Vec<u8> = t.into();
         for i in ta {

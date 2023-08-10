@@ -23,13 +23,13 @@ fn execute<Host: Runtime>(host: &mut Host) {
     match input {
         // If it's an error or no messages then does nothing
         Err(_) | Ok(None) => {
-            host.write_debug("read_input with error.\n");
+            host.write_debug("read_input with EOF or error.\n");
         }
         Ok(Some(message)) => {
             debug_msg!(host, "--------------Start next input.\n");
 
             let data = message.as_ref();
-            debug_msg!(host, "data: {:?}\n", data);
+            //debug_msg!(host, "data: {:?}\n", data);
             handle_todo_payloads(host, data).unwrap();
             // Process next input
             debug_msg!(host, "--------------Process next input.\n");
@@ -94,11 +94,12 @@ fn handle_todo_payloads<Host: Runtime>(host: &mut Host, data: &[u8]) -> Result<(
 
 kernel_entry!(entry);
 
-
+// To run:
+// 1. cargo build --release --target wasm32-unknown-unknown
+// 2. octez-smart-rollup-wasm-debugger ./target/wasm32-unknown-unknown/release/md_dev_kernel.wasm --inputs ./inputs.json <<< $(cat commands.txt)
+// For payload of "external" key in the inputs.json, you can generate it from test_ta_into() in todo.rs
 #[cfg(test)]
 mod tests {
-    use tezos_smart_rollup::{host::Runtime, storage::path::OwnedPath};
-    use tezos_smart_rollup::prelude::*;
 
     // This test is intent to create a payload to send to the kernel, like inputs.json.
     // Any message will do. Just see the output in the console.
