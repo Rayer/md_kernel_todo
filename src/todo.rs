@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use magic_crypt::{MagicCryptTrait, new_magic_crypt};
+
 #[cfg(target_arch = "wasm32")]
 use serde_json_wasm as serde_json;
 
@@ -87,7 +89,7 @@ impl Todo {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Action {
     Create,
     Read,
@@ -95,10 +97,12 @@ pub enum Action {
     MarkComplete,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoActions {
     pub action: Action,
     pub user: String,
+    pub todo_payload: Vec<u8>,
+    #[serde(skip)]
     pub todo: Todo,
 }
 
@@ -108,15 +112,24 @@ impl TryFrom<Vec<u8>> for TodoActions {
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         let str = String::from_utf8(value).unwrap();
         let str = str.trim_end_matches(char::from(0));
-        serde_json::from_str(&str).map_err(|e| e.to_string())
+        let mut ta = serde_json::from_str::<TodoActions>(&str).map_err(|e| e.to_string());
+        if let Ok(ref mut ta) = ta {
+            let mcrypt = new_magic_crypt!(&ta.user, 256);
+            let dec = mcrypt.decrypt_bytes_to_bytes(&ta.todo_payload).unwrap();
+            ta.todo = serde_json::from_slice(&dec).unwrap();
+        }
+        ta
     }
 }
 
 impl Into<Vec<u8>> for TodoActions {
-    fn into(self) -> Vec<u8> {
-        let todo_str = serde_json::to_string(&self).unwrap();
+    fn into(mut self) -> Vec<u8> {
+        let todo_str = serde_json::to_string(&self.todo).unwrap();
+        let mcrypt = new_magic_crypt!(&self.user, 256);
+        self.todo_payload = mcrypt.encrypt_str_to_bytes(todo_str);
+        let todo_action_str = serde_json::to_string(&self).unwrap();
         let mut ret: Vec<u8> = Vec::with_capacity(MAX_TODO_PAYLOAD_SIZE);
-        let bytes = todo_str.as_bytes();
+        let bytes = todo_action_str.as_bytes();
         if bytes.len() <= ret.capacity() {
             ret.extend_from_slice(bytes);
         } else {
@@ -136,6 +149,7 @@ mod tests {
             action: Action::MarkComplete,
             todo: Todo::new(1, "Test1".to_string(), 0, 0, false, "Rayer".to_string()),
             user: "Rayer".to_string(),
+            todo_payload: vec![],
         };
         let ta : Vec<u8> = t.into();
         for i in ta {
