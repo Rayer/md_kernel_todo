@@ -1,74 +1,63 @@
-use serde::{Deserialize, Serialize};
-use magic_crypt::{MagicCryptTrait, new_magic_crypt};
-
-#[cfg(target_arch = "wasm32")]
-use serde_json_wasm as serde_json;
-
-#[cfg(not(target_arch = "wasm32"))]
-use serde_json;
 
 pub const MAX_TODO_PAYLOAD_SIZE: usize = 2048;
 pub const MAX_TODO_SIZE: usize = MAX_TODO_PAYLOAD_SIZE - 1;
 
+use magic_crypt::{MagicCryptTrait, new_magic_crypt};
+use tezos_data_encoding;
+use tezos_data_encoding::enc::BinWriter;
+use tezos_data_encoding::nom::NomReader;
 
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(NomReader, BinWriter, Debug)]
 pub struct Todo {
-    pub id: u64,
     pub title: String,
-    pub created_time: u64,
-    pub due_time: u64,
+    pub created_time: i64,
+    pub due_time: i64,
     pub completed: bool,
     pub owner: String,
 }
 
 impl Default for Todo {
     fn default() -> Self {
-        Todo::new(0, "".to_string(), 0, 0, false, "".to_string())
+        Todo::new("".to_string(), 0, 0, false, "".to_string())
     }
 }
 
-impl TryFrom<Vec<u8>> for Todo {
-    type Error = String;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, String> {
-        // deserialize Vec<u8> to Todo
-        let todo_str = String::from_utf8(value).unwrap();
-        let todo_str = todo_str.trim_end_matches(char::from(0));
-        //debug_msg!("todo_str: {}", todo_str);
-        let todo: Todo = serde_json_wasm::from_str(&todo_str).unwrap();
-        //let todo: Todo = serde_json_wasm::from_slice(&value).unwrap();
-        Ok(todo)
-    }
-}
-
-impl Into<[u8; MAX_TODO_SIZE]> for Todo {
-    fn into(self) -> [u8; MAX_TODO_SIZE] {
-        // make Todo as json str
-        let todo_str = serde_json_wasm::to_string(&self).unwrap();
-        // return this str
-        let mut ret: [u8; MAX_TODO_SIZE] = [0; MAX_TODO_SIZE]; // Initialize the array with zeros
-        let bytes = todo_str.as_bytes();
-        if bytes.len() <= ret.len() {
-            ret[..bytes.len()].copy_from_slice(bytes);
-            //println!("Converted array: {:?}", ret);
-        } else {
-            //println!("String is too long to fit in the array");
-            panic!("String is too long to fit in the array")
-        }
-        ret
-    }
-}
 
 impl Todo {
-    pub fn new(id: u64, title: String, created_time: u64, due_time: u64, completed: bool, owner: String) -> Self {
+    pub fn new(title: String, created_time: i64, due_time: i64, completed: bool, owner: String) -> Self {
         Self {
-            id,
             title,
             created_time,
             due_time,
             completed,
             owner,
+        }
+    }
+
+    pub fn encrypt(&self) -> Vec<u8> {
+        let mut bytes = Vec::default();
+        let result = self.bin_write(&mut bytes);
+        match result {
+            Ok(_) => (),
+            Err(e) => {
+                println!("Error encrypting todo: {:?}", e);
+                return Vec::default();
+            }
+        }
+        let mc = new_magic_crypt!(&self.owner, 256);
+        mc.encrypt_to_bytes(bytes.as_slice())
+    }
+
+    pub fn decrypt(bytes: &[u8], owner: &str) -> Self {
+        let mc = new_magic_crypt!(owner, 256);
+        let decrypted = mc.decrypt_bytes_to_bytes(bytes).unwrap();
+        let result = Todo::nom_read(decrypted.as_slice());
+        match result {
+            Ok((_, res)) => (res),
+            Err(e) => {
+                println!("Error decrypting todo: {:?}", e);
+                return Todo::default();
+            }
         }
     }
 
@@ -89,7 +78,7 @@ impl Todo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, NomReader, BinWriter)]
 pub enum Action {
     Create,
     Read,
@@ -97,73 +86,46 @@ pub enum Action {
     MarkComplete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, NomReader, BinWriter)]
 pub struct TodoActions {
+    pub id: i64,
     pub action: Action,
     pub user: String,
-    pub todo_payload: Vec<u8>,
-    #[serde(skip)]
     pub todo: Todo,
 }
 
-impl TryFrom<Vec<u8>> for TodoActions {
-    type Error = String;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let str = String::from_utf8(value).unwrap();
-        let str = str.trim_end_matches(char::from(0));
-        let mut ta = serde_json::from_str::<TodoActions>(&str).map_err(|e| e.to_string());
-        if let Ok(ref mut ta) = ta {
-            let mcrypt = new_magic_crypt!(&ta.user, 256);
-            let dec = mcrypt.decrypt_bytes_to_bytes(&ta.todo_payload).unwrap();
-            ta.todo = serde_json::from_slice(&dec).unwrap();
-        }
-        ta
-    }
-}
-
-impl Into<Vec<u8>> for TodoActions {
-    fn into(mut self) -> Vec<u8> {
-        let todo_str = serde_json::to_string(&self.todo).unwrap();
-        let mcrypt = new_magic_crypt!(&self.user, 256);
-        self.todo_payload = mcrypt.encrypt_str_to_bytes(todo_str);
-        let todo_action_str = serde_json::to_string(&self).unwrap();
-        let mut ret: Vec<u8> = Vec::with_capacity(MAX_TODO_PAYLOAD_SIZE);
-        let bytes = todo_action_str.as_bytes();
-        if bytes.len() <= ret.capacity() {
-            ret.extend_from_slice(bytes);
-        } else {
-            panic!("String is too long to fit in the array")
-        }
-        ret
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    use tezos_data_encoding::encoding::Encoding;
     use super::*;
 
     #[test]
     fn test_ta_into() {
         let t = TodoActions {
+            id: 1,
             action: Action::MarkComplete,
-            todo: Todo::new(1, "Test1".to_string(), 0, 0, false, "Rayer".to_string()),
+            todo: Todo::default(),
             user: "Rayer".to_string(),
-            todo_payload: vec![],
         };
-        let ta : Vec<u8> = t.into();
-        for i in ta {
+
+        let mut output = Vec::default();
+        let result = t.bin_write(&mut output);
+        for i in &output {
             print!("{:02X}", i);
         }
-        println!()
+        println!();
+
+        let (_, expected) = TodoActions::nom_read(&output).unwrap();
+        println!("{:?}", expected);
     }
 
-    #[test]
-    fn test_ta_try_from() {
-        let todo_str = r#"{"id":0,"title":"test","created_time":0,"due_time":0,"completed":false,"deleted":false,"owner":""}"#;
-        println!("{}", todo_str);
-        let todo: Todo = serde_json_wasm::from_str(&todo_str).unwrap();
-        println!("{:?}", todo);
-    }
+    // #[test]
+    // fn test_ta_try_from() {
+    //     let todo_str = r#"{"id":0,"title":"test","created_time":0,"due_time":0,"completed":false,"deleted":false,"owner":""}"#;
+    //     println!("{}", todo_str);
+    //     let todo: Todo = serde_json_wasm::from_str(&todo_str).unwrap();
+    //     println!("{:?}", todo);
+    // }
 
 }

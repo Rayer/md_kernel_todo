@@ -1,12 +1,13 @@
 mod todo;
 
 use std::error::Error;
+use tezos_data_encoding::nom::NomReader;
 use tezos_smart_rollup::{kernel_entry, prelude::*, storage::path::OwnedPath};
 use crate::todo::{Action, MAX_TODO_PAYLOAD_SIZE, MAX_TODO_SIZE, Todo, TodoActions};
 
 const TODO_PATH: &str = "/todo/";
 
-pub fn create_todo_path(id: u64) -> OwnedPath {
+pub fn create_todo_path(id: i64) -> OwnedPath {
     // make path like "/todo/1"
     let path : String = format!("{}{}", TODO_PATH, id);
     path.as_bytes().to_vec().try_into().unwrap()
@@ -14,7 +15,7 @@ pub fn create_todo_path(id: u64) -> OwnedPath {
 
 pub fn entry<Host: Runtime>(host: &mut Host) {
     execute(host);
-    host.write_debug("Hello Kernel\n");
+    host.write_debug("End of executing Kernel\n");
 }
 
 fn execute<Host: Runtime>(host: &mut Host) {
@@ -46,41 +47,34 @@ fn handle_todo_payloads<Host: Runtime>(host: &mut Host, data: &[u8]) -> Result<(
         }
         [0x01, payload @ ..] => {
             host.write_debug("Message from the user.\n");
-            //debug_msg!(host, "Message from the user: {:?}\n", payload);
-            // payload to str
-            let payload_str = String::from_utf8(payload.to_vec()).unwrap();
-            debug_msg!(host, "payload: {:?}\n", payload_str);
-            //Let's skip the first byte of the data to get what the user has sent.
-            let ta: TodoActions = TodoActions::try_from(payload.to_vec()).or_else(|_| {
-                host.write_debug("Error: TodoActions::try_from.\n");
-                Err(())
-            }).unwrap();
+            let (_, mut ta) = TodoActions::nom_read(payload).unwrap();
+            debug_msg!(host, "TodoActions: {:?}\n", ta);
+            let todo_path: OwnedPath = create_todo_path(ta.id);
             match ta.action {
                 Action::Create => {
-                    let todo: [u8; MAX_TODO_SIZE] = ta.todo.clone().try_into().unwrap();
-                    let todo_path: OwnedPath = create_todo_path(ta.todo.id);
-                    let _ = Runtime::store_write(host, &todo_path, &todo, 0);
+                    //let todo: [u8; MAX_TODO_SIZE] = ta.todo.clone().try_into().unwrap();
+                    debug_msg!(host, "write to path: {:?}\n", todo_path);
+                    if ta.todo.owner == "" {
+                        ta.todo.owner = ta.user;
+                    }
+                    let todo_payload = ta.todo.encrypt();
+                    let _ = Runtime::store_write_all(host, &todo_path, &todo_payload);
                 }
+                //Read for debug purpose only
                 Action::Read => {
-                    let todo_path: OwnedPath = create_todo_path(ta.todo.id);
-                    let todo_bytes = Runtime::store_read(host, &todo_path, 0, MAX_TODO_PAYLOAD_SIZE)?;
-                    //debug_msg!(host, "todo_bytes: {:?}\n", todo_bytes);
-                    debug_msg!(host, "todo_bytes utf8 : {}\n", String::from_utf8(todo_bytes.to_vec())?);
-                    let todo = Todo::try_from(todo_bytes)?;
-                    //let _ = Runtime::write_output(host, &todo.into());
+                    let todo_payload = Runtime::store_read_all(host, &todo_path)?;
+                    let todo = Todo::decrypt(&todo_payload, ta.user.as_str());
                     debug_msg!(host, "Read Todo: {:?}\n", todo);
                 }
                 Action::Delete => {
-                    let todo_path: OwnedPath = create_todo_path(ta.todo.id);
                     let _ = Runtime::store_delete(host, &todo_path);
                 }
                 Action::MarkComplete => {
-                    let todo_path: OwnedPath = create_todo_path(ta.todo.id);
-                    let todo_bytes = Runtime::store_read(host, &todo_path, 0, MAX_TODO_PAYLOAD_SIZE)?;
-                    let mut todo = Todo::try_from(todo_bytes)?;
+                    let mut todo_payload = Runtime::store_read_all(host, &todo_path)?;
+                    let mut todo = Todo::decrypt(&todo_payload, ta.user.as_str());
                     todo.completed = true;
-                    let todo_complete: [u8; MAX_TODO_SIZE] = todo.into();
-                    let _ = Runtime::store_write(host, &todo_path, &todo_complete, 0);
+                    todo_payload = todo.encrypt();
+                    let _ = Runtime::store_write_all(host, &todo_path, &todo_payload);
                 }
             }
         }
