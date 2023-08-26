@@ -52,3 +52,5 @@ You can refer to `test_ta_into()` in `todo.rs` to see how to generate this paylo
 ## Authentication and Authorization
 
 You need to provide correct user in TodoAction.User in order to access Todo Item. If user is not matched, transaction will be failed for failed to decrypt Todo payload into Todo.
+
+<img width="579" alt="image" src="https://github.com/Rayer/md_kernel_todo/assets/156013/a0468a4c-e319-4e5a-892d-40d1b19767a5">
