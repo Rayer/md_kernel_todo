@@ -51,6 +51,14 @@ This payload can be generated from `test_ta_into()` in `todo.rs`. This 4 payload
 3. Mark complete of this todo
 4. Read this todo again.
 
+Base concept is
+- Provide TodoAction and encode in `external` field
+- TodoAction will be decoded and execute these actions:
+  - Create : Encrypt TodoAction::todo into Todo and store in key `/todo/{id}`
+  - Read : Decrypt Todo in key `/todo/{id}` into TodoAction::todo, it is for debug propose only
+  - MarkComplete : Decrypt Todo in key `/todo/{id}` into TodoAction::todo, and update TodoAction::todo.completed = true, then encrypt TodoAction::todo into Todo and store in key `/todo/{id}`
+  - Delete : Delete key `/todo/{id}`
+
 You can refer to `test_ta_into()` in `todo.rs` to see how to generate this payload.
 
 ## Authentication and Authorization
